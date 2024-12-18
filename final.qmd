@@ -1,0 +1,521 @@
+---
+title: "SHEIN Women Clothes Review Analysis"
+author: "Yahan Yang"
+date: 2024-12-10
+format:
+  pdf:
+    documentclass: article
+    geometry: margin=1in
+bibliography: references.bib
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+# 1. Introduction
+
+In today’s digital age, e-commerce platforms have become essential for shopping, offering consumers the convenience of browsing and purchasing a vast range of products online. This project examines a dataset of women's clothing reviews from SHEIN, encompassing attributes like review content, rating, age, product title, and department classification for different categories of clothes. The primary research question driving this analysis is: *How do factors such as product category, and rating impact the sentiment and language of customer reviews? Do they have interaction?* These questions are quite compelling because it looks into consumer behavior and sentiment—a crucial area for online retail as it seeks to personalize and enhance the shopping experience. By analyzing these textual reviews, this study aims to uncover insights into customer preferences and expectations, providing valuable information that can guide product recommendations and improve customer satisfaction. Understanding these dynamics is essential in a competitive market where consumer insights can make a substantial difference in product positioning and customer loyalty.
+
+```{python}
+import pandas as pd
+import seaborn as sns
+
+# df = pd.read_csv("hf://datasets/Censius-AI/ECommerce-Women-Clothing-Reviews/Womens Clothing E-Commerce Reviews.csv")
+
+df = pd.read_excel("clothes_data.xlsx")
+df = df.drop(columns=["Unnamed: 0","Clothing ID", "Title"]).reset_index(drop = True)
+```
+```{python}
+from nltk.stem import WordNetLemmatizer
+import string
+```
+
+# 2. Data
+
+The dataset for this project consists of customer reviews for women's clothing on an e-commerce platform called SHEIN. It is downloaded from *HuggingFace* It includes 23,486 entries with 12 columns, providing various attributes about each review and product. After filtering all the columns where reviews are not blank, there are a total of 22641 observations left. Here’s an overview of the dataset columns:
+
+1.  **Clothing ID**: Unique identifier for each clothing item.
+
+2.  **Age**: Age of the reviewer.
+
+3.  **Title**: Title of the review, giving a brief description or opinion.
+
+4.  **Review Text**: Detailed text of the customer review.
+
+5.  **Rating**: Rating given by the customer, ranging from 1 to 5.
+
+6.  **Recommended IND**: Indicator if the reviewer recommends the product (1 for yes, 0 for no).
+
+7.  **Positive Feedback Count**: Count of positive feedback received for the review.
+
+8.  **Division Name**: High-level division in which the item is categorized (e.g., General, Initmates).
+
+9.  **Department Name**: More specific department name under the division (e.g., Dresses, Tops).
+
+10. **Class Name**: Product category within the department (e.g., Blouses, Dresses, Pants).
+
+In this experiment, the *Review Text* column was used for text tokenization and further analysis, along with *Department Name*, as we want to look into a basic trend of the data. Other variables such as *age*, *Rating* are also of interest.
+```{python}
+df["binary_rating"] = df['Rating'].apply(lambda x: 'low' if x in [1,2,3] else 'high')
+```
+```{python}
+grouped_data = df.groupby('binary_rating')['Review Text'].apply(list).reset_index()
+
+# Initialize the lemmatizer
+lemmatizer = WordNetLemmatizer()
+
+# Function to tokenize, strip punctuation, and lemmatize
+def tokenize_and_lemmatize(reviews):
+    punct_table = str.maketrans('', '', string.punctuation)
+    lemmatized_reviews = []
+    for review in reviews:
+        if pd.notnull(review):
+            # Remove punctuation, tokenize, and lemmatize each word
+            tokens = str(review).lower().translate(punct_table).split()
+            lemmatized_tokens = [lemmatizer.lemmatize(token) for token in tokens]
+            lemmatized_reviews.append(lemmatized_tokens)
+    return lemmatized_reviews
+
+# Apply the function to the review text
+grouped_data['Tokenized and Lemmatized Text'] = grouped_data['Review Text'].apply(tokenize_and_lemmatize)
+
+# Display the updated DataFrame
+# grouped_data.head()
+
+```
+
+```{python}
+#| tbl-cap: "Statistics Summary of Departments"
+def calculate_text_statistics(tokenized_texts):
+    # Flatten the list of lists to count total words
+    total_words = sum(len(tokens) for tokens in tokenized_texts)
+    num_reviews = len(tokenized_texts)  # Count of reviews
+    avg_words_per_review = total_words / num_reviews if num_reviews > 0 else 0
+    return total_words, num_reviews, avg_words_per_review
+
+grouped_data['Total Words'], grouped_data['Review Count'], grouped_data['Avg Words per Review'] = zip(
+    *grouped_data['Tokenized and Lemmatized Text'].apply(calculate_text_statistics)
+)
+
+stats_summary = grouped_data[['binary_rating', 'Total Words', 'Review Count', 'Avg Words per Review']].reset_index(drop=True)
+
+stats_summary
+```
+
+# 3. Methods
+
+## 3.1 Choice of Methods and Reasons
+This project uses frequency analysis, sentiment analysis and Principal Component Analysis for clustering. Before implementing any analysis, we feature engineer a new column called "binary rating", which takes column "rating" from 1 to 3 as "low", 4 to 5 as "high". As the previous coffee break experiment shows us there is no significant difference between each category, we instead focus on the binary rating.
+
+**Frequency Analysis**: Frequency analysis was chosen to identify the most commonly used words in customer reviews for each clothing category. This is very useful for exploring lexical differences and thematic focus across product categories. The method provides a straightforward way to understand the key topics or features that customers frequently mention, such as "fit," "size," or "style." By comparing the top words across ratings, the project hopes to understand some interesting features (e.g., positive adjectives for high ratings and negative words for low ratings) and category-specific language features (e.g., "dress" and "look" in dresses, or "jacket" and "warm" in jackets). 
+
+**Sentiment Analysis**: Sentiment analysis was used to explore how customers feel about different categories of clothing. This is important for understanding the nuances of language use, because words with similar frequencies may carry vastly different sentiments depending on the context. This method helps discover the emotional tone of reviews, such as positive sentiments about quality or negative sentiments about poor fit. By combining sentiment analysis with frequency analysis, we can assess not only what customers are talking about but also how they feel about ratings hopefully. For example, we can understand better about the tone for high and low ratings.
+
+**PCA Cluster Analysis**: Clustering allows for an unsupervised exploration of patterns in the text to discover natural groupings that may not align strictly with predefined categories (@Gries2011). For instance, reviews about dresses and tops may share similar language around "style," forming a cluster. Clustering helps to identify underlying themes in customer feedback and uncover shared or unique linguistic patterns that could inform product-specific marketing strategies or improvements. Here, we adopt the method to investigate the difference between clothes categories.
+
+# 4. Results
+```{python}
+df1 = grouped_data[["binary_rating", "Tokenized and Lemmatized Text"]]
+
+# Create a new DataFrame with combined tokens for each department
+df1['Combined Reviews'] = df1['Tokenized and Lemmatized Text'].apply(
+    lambda reviews: [token for review in reviews for token in review]
+)
+
+# Alternatively, join them into a single string if needed for text-based analysis
+df1['Combined Reviews String'] = df1['Combined Reviews'].apply(lambda tokens: " ".join(tokens))
+
+# df1
+```
+
+## 4.1 Frequency Analysis
+
+```{python}
+import nltk
+from collections import Counter
+from nltk.corpus import stopwords
+
+# Download NLTK's stopwords if not already available
+nltk.download('stopwords')
+
+# Get the list of English stop words
+stop_words = set(stopwords.words('english'))
+
+# Function to filter out stop words
+def filter_stop_words(text):
+    words = text.split()
+    return [word for word in words if word not in stop_words]
+
+# Apply stop word filtering to the "Combined Reviews String" column
+df1['Filtered Reviews'] = df1['Combined Reviews String'].apply(lambda x: " ".join(filter_stop_words(x)))
+
+# Recompute word frequencies for each department using the filtered reviews
+word_frequencies_filtered = {}
+for _, row in df1.iterrows():
+    department = row['binary_rating']
+    filtered_text = row['Filtered Reviews']
+    
+    # Tokenize the filtered text into individual words
+    words = filtered_text.split()
+    total_words = len(words)  # Total word count for relative frequency
+    
+    # Count the frequency of each word
+    word_count = Counter(words)
+    
+    # Compute relative frequency
+    relative_freq = {word: count / total_words * 100000 for word, count in word_count.items()}
+    
+    # Store the relative frequency counts for the department
+    word_frequencies_filtered[department] = relative_freq
+
+# Convert word frequencies into a DataFrame for visualization
+frequency_dfs_filtered = {}
+for department, frequencies in word_frequencies_filtered.items():
+    # Create a DataFrame sorted by relative frequency for each department
+    relative_df = pd.DataFrame(frequencies.items(), columns=['Word', 'Relative Frequency']).sort_values(by='Relative Frequency', ascending=False)
+    frequency_dfs_filtered[department] = relative_df
+```
+
+```{python}
+#| fig-cap: "Token Frequency Display of Binary Rating"
+import matplotlib.pyplot as plt
+
+# Extract the department names from the dictionary keys
+departments = list(frequency_dfs_filtered.keys())
+
+# Create a grid of subplots (adjust rows/columns based on department count)
+fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(12, 6))  # Adjust rows/cols for your dataset
+axes = axes.flatten()  # Flatten the 2D array of axes into 1D for easier indexing
+
+# Plot each department's word frequency in its corresponding subplot
+for i, department in enumerate(departments):
+    top_words_filtered = frequency_dfs_filtered[department].head(20)  # Get top 20 words
+    
+    ax = axes[i]
+    ax.bar(top_words_filtered['Word'], top_words_filtered['Relative Frequency'], color='skyblue')
+    ax.set_title(f"Top 20 Words in '{department}' Reviews", fontsize=10)
+    ax.set_xlabel("Words", fontsize=9)
+    ax.set_ylabel("Relative Frequency", fontsize=9)
+    ax.tick_params(axis='x', labelsize=8, rotation=45)
+    ax.tick_params(axis='y', labelsize=8)
+
+# Turn off unused subplots if the grid is larger than the number of departments
+for j in range(len(departments), len(axes)):
+    axes[j].axis('off')
+
+# Adjust layout for better spacing
+plt.tight_layout()
+plt.show()
+
+```
+
+Looking at the top 20 tokens of both "high" and "low" ratings, we spot the need to understand the word appearing frequency. Hence, a wordcloud graph is used to visualize the words in both rating categories.
+
+```{python}
+#| fig-cap: "Word Cloud of Binary Rating"
+from wordcloud import WordCloud
+
+# Function to generate a word cloud
+def generate_word_cloud(text, ax, title):
+    wordcloud = WordCloud(width=800, height=400, background_color='white').generate(text)
+    ax.imshow(wordcloud, interpolation='bilinear')
+    ax.axis('off')
+    ax.set_title(title, fontsize=14)
+
+# Combine reviews for high and low ratings
+high_reviews = " ".join(df1[df1['binary_rating'] == 'high']['Filtered Reviews'])
+low_reviews = " ".join(df1[df1['binary_rating'] == 'low']['Filtered Reviews'])
+
+# Create a side-by-side plot for word clouds
+fig, axes = plt.subplots(1, 2, figsize=(16, 10))
+
+# Word cloud for high ratings
+generate_word_cloud(high_reviews, axes[0], 'Word Cloud for High Ratings')
+
+# Word cloud for low ratings
+generate_word_cloud(low_reviews, axes[1], 'Word Cloud for Low Ratings')
+
+# Show the plot
+plt.tight_layout()
+plt.show()
+
+```
+
+## 4.2 Interaction between binary rating and clothes department
+After categorizing the ratings into high and low, we are interested in how they are distributed in each clothes department. The following statistics summary shows that within each category, high ratings take up around 80% for bottoms, dresses, intimate, jackets and tops. As for trend, the high rating percentage is lower than other 5 categories (65%). Using Chi-squared test, we calculate the p value to be less than 0.001, which suggests the distribution of binary ratings differs significantly between each clothes category.
+```{python}
+#| tbl-cap: "Binary Rating Varies Across Departments"
+department_summary = df.groupby(['Department Name', 'binary_rating']).size().unstack()
+
+department_summary['low_ratio'] = round(department_summary['low'] / department_summary.sum(axis=1),2)
+department_summary['high_ratio'] = round(department_summary['high'] / department_summary.sum(axis=1),2)
+department_summary
+```
+
+```{python}
+from scipy.stats import chi2_contingency
+
+# Create a contingency table
+contingency_table = department_summary.iloc[:, :2]
+
+# Perform Chi-Square test
+chi2, p, dof, expected = chi2_contingency(contingency_table)
+
+# print(f"Chi-Square Statistic: {chi2}, p-value: {p}")
+```
+
+```{python}
+#| fig-cap: "Binary Rating within Each Department"
+department_summary['total'] = department_summary['high'] + department_summary['low']
+
+plt.figure(figsize = (10,6))
+# Plot low ratings
+low_bars = plt.bar(
+    department_summary.index,
+    department_summary['low'],
+    label='Low Ratings',
+    color="#5A9BD5"
+)
+
+# Plot high ratings on top of low ratings
+high_bars = plt.bar(
+    department_summary.index,
+    department_summary['high'],
+    bottom=department_summary['low'],  # Stack on top of low ratings
+    label='High Ratings',
+    color="#D9D9D9"
+)
+
+# Add titles and labels
+plt.title('Overall Review Numbers by Department with Proportions', fontsize=14)
+plt.xlabel('Department Name', fontsize=12)
+plt.ylabel('Number of Reviews', fontsize=12)
+plt.xticks(rotation=45)
+plt.legend(title='Rating Type', fontsize=10)
+plt.tight_layout()
+
+plt.show()
+```
+
+## 4.3 Sentiment Analysis
+Proceeding to sentiment analysis, we found that two binary ratings differ in their sentiment scores: High rating has higher positive score while low rating has higher neutral score.
+```{python}
+nltk.download('vader_lexicon')
+from nltk.sentiment.vader import SentimentIntensityAnalyzer
+analyzer = SentimentIntensityAnalyzer()
+
+def get_sentiment(text):
+    scores = analyzer.polarity_scores(text)
+    sentiment = scores
+    return scores
+df1['sentiment'] = df1['Filtered Reviews'].apply(get_sentiment)
+
+df1['Sentiment Compound'] = df1['sentiment'].apply(lambda x: x['compound'])
+df1['Sentiment negative'] = df1['sentiment'].apply(lambda x: x['neg'])
+df1['Sentiment neutral'] = df1['sentiment'].apply(lambda x: x['neu'])
+df1['Sentiment positive'] = df1['sentiment'].apply(lambda x: x['pos'])
+
+melted_df = df1.melt(
+    id_vars=['binary_rating'],
+    value_vars=['Sentiment negative', 'Sentiment neutral', 'Sentiment positive'],
+    var_name='Sentiment Type',
+    value_name='Score'
+)
+
+```
+
+```{python}
+#| fig-cap: "Sentiment Score by Binary Rating"
+plt.figure(figsize=(10, 6))
+barplot = sns.barplot(
+    data=melted_df,
+    x='binary_rating',
+    y='Score',
+    hue='Sentiment Type',
+    palette='coolwarm'
+)
+for p in barplot.patches:
+    if p.get_height() > 0.01:  # Only label bars with significant height
+        barplot.annotate(
+            format(p.get_height(), '.2f'),
+            (p.get_x() + p.get_width() / 2., p.get_height()),
+            ha='center', va='center',
+            xytext=(0, 8),
+            textcoords='offset points',
+            fontsize=9, color='black'
+        )
+
+plt.title('Sentiment Scores--Binary Rating', fontsize=14)
+plt.xlabel('Binary Rating', fontsize=12)
+plt.ylabel('Sentiment Score', fontsize=12)
+# plt.xticks(rotation=45)
+plt.legend(title='Sentiment Type', fontsize = 10)
+plt.tight_layout()
+plt.show()
+```
+
+
+```{python}
+grouped_data = df.groupby(['binary_rating','Department Name'])['Review Text'].apply(list).reset_index()
+
+# Initialize the lemmatizer
+lemmatizer = WordNetLemmatizer()
+
+# Function to tokenize, strip punctuation, and lemmatize
+def tokenize_and_lemmatize(reviews):
+    punct_table = str.maketrans('', '', string.punctuation)
+    lemmatized_reviews = []
+    for review in reviews:
+        if pd.notnull(review):
+            # Remove punctuation, tokenize, and lemmatize each word
+            tokens = str(review).lower().translate(punct_table).split()
+            lemmatized_tokens = [lemmatizer.lemmatize(token) for token in tokens]
+            lemmatized_reviews.append(lemmatized_tokens)
+    return lemmatized_reviews
+
+# Apply the function to the review text
+grouped_data['Tokenized and Lemmatized Text'] = grouped_data['Review Text'].apply(tokenize_and_lemmatize)
+
+df2 = grouped_data[["binary_rating", "Department Name", "Tokenized and Lemmatized Text"]]
+
+# Create a new DataFrame with combined tokens for each department
+df2['Combined Reviews'] = df2['Tokenized and Lemmatized Text'].apply(
+    lambda reviews: [token for review in reviews for token in review]
+)
+
+# Alternatively, join them into a single string if needed for text-based analysis
+df2['Combined Reviews String'] = df2['Combined Reviews'].apply(lambda tokens: " ".join(tokens))
+
+
+# Get the list of English stop words
+stop_words = set(stopwords.words('english'))
+
+# Function to filter out stop words
+def filter_stop_words(text):
+    words = text.split()
+    return [word for word in words if word not in stop_words]
+
+# Apply stop word filtering to the "Combined Reviews String" column
+df2['Filtered Reviews'] = df2['Combined Reviews String'].apply(lambda x: " ".join(filter_stop_words(x)))
+
+df2['sentiment'] = df2['Filtered Reviews'].apply(get_sentiment)
+
+df2['Sentiment Compound'] = df2['sentiment'].apply(lambda x: x['compound'])
+df2['Sentiment negative'] = df2['sentiment'].apply(lambda x: x['neg'])
+df2['Sentiment neutral'] = df2['sentiment'].apply(lambda x: x['neu'])
+df2['Sentiment positive'] = df2['sentiment'].apply(lambda x: x['pos'])
+
+melted_df = df2.melt(
+    id_vars=['binary_rating'],
+    value_vars=['Sentiment negative', 'Sentiment neutral', 'Sentiment positive'],
+    var_name='Sentiment Type',
+    value_name='Score'
+)
+```
+
+```{python}
+#| fig-cap: "Sentiment Distribution"
+# Create a figure with two subplots (side by side)
+fig, axes = plt.subplots(1, 2, figsize=(16, 8), sharey=True)
+
+# Plot positive sentiment distributions (left subplot)
+for department in df2['Department Name'].unique():
+    subset = df2[df2['Department Name'] == department]
+    sns.kdeplot(subset['Sentiment positive'], label=f'{department} Positive', fill=True, alpha=0.3, ax=axes[0])
+
+axes[0].set_title('Positive Sentiment Distribution by Department', fontsize=14)
+axes[0].set_xlabel('Sentiment Score', fontsize=12)
+axes[0].set_ylabel('Density', fontsize=12)
+axes[0].legend(title='Department', fontsize=9)
+
+# Plot negative sentiment distributions (right subplot)
+for department in df2['Department Name'].unique():
+    subset = df2[df2['Department Name'] == department]
+    sns.kdeplot(subset['Sentiment negative'], label=f'{department} Negative', fill=True, alpha=0.3, ax=axes[1])
+
+axes[1].set_title('Negative Sentiment Distribution by Department', fontsize=14)
+axes[1].set_xlabel('Sentiment Score', fontsize=12)
+axes[1].set_ylabel('')  # Remove redundant y-axis label
+axes[1].legend(title='Department', fontsize=9)
+
+# Adjust layout for better appearance
+plt.tight_layout()
+plt.show()
+
+```
+
+## 4.4 Principal Component Analysis
+
+With the numerical variables in the given dataset, we use PCA analysis to cluster the departments. Here, we consider all variables inluding age, rating, recommend IND (binary), and positive feedback count in an attempt to give a more extensive analysis of the data set.
+```{python}
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+```
+
+```{python}
+#| fig-cap: "PCA Cluster Analysis"
+numeric_features = df[['Age', 'Rating', 'Recommended IND', 'Positive Feedback Count']]
+
+# Standardize the data
+scaler = StandardScaler()
+scaled_data = scaler.fit_transform(numeric_features)
+# Apply PCA to reduce dimensionality
+pca = PCA(n_components=2)  # Retain 2 components for visualization
+principal_components = pca.fit_transform(scaled_data)
+
+# Create a new DataFrame with the principal components
+pca_df = pd.DataFrame(data=principal_components, columns=['PC1', 'PC2'])
+
+# Add labels (e.g., binary_rating and Department Name)
+pca_df['binary_rating'] = df['binary_rating']
+pca_df['Department Name'] = df['Department Name']
+# Scatterplot of the PCA results
+plt.figure(figsize=(10, 8))
+for department in pca_df['Department Name'].unique():
+    subset = pca_df[pca_df['Department Name'] == department]
+    plt.scatter(subset['PC1'], subset['PC2'], label=department, alpha=0.3)
+
+plt.title('PCA of Reviews: Clustering by Department', fontsize=14)
+plt.xlabel('Principal Component 1', fontsize=12)
+plt.ylabel('Principal Component 2', fontsize=12)
+plt.legend(title='Department Name', fontsize=10)
+plt.tight_layout()
+plt.show()
+```
+
+
+# 5. Discussion
+
+## 5.1 Conclusion
+
+### 5.1.1 Frequency Analysis and Interaction
+The frequency analysis graph of words across two ratings shows the key terms customers frequently use in their reviews. For example, words like "dress" and "top" appear the most frequently in both high and low ratings, reflecting their importance in clothing reviews. However, there are also unique terms within each category. For instance, for high rating, the top words would mention extreme adjectives such as "love" "great""perfect", while low rating places more importance in descriptive words. We also observe the "love" word appearing, but this should not be concerning as we categorize rating = 3 as low, when in reality it might representive a neutral perspective.
+
+However, one thing to notice is that many of the describing words are overlapping despite the preassumptions that they could differ in terms of rating. Even though words with strong emotions appear at the same time, their frequency are very different. This suggests that low rating does not necessarily lead to bad words, deviating from what we anticipated. 
+
+We were hoping to distinguish the interaction between clothes departments and rating classification, but Figure 2 shows the distribution is generally the same across all categories except for trend. Intuitively, trend is a relatively fashionable type of clothing, which may lead to a more polar review collection.
+
+### 5.1.2 Sentiment Analysis Result
+Sentiment analysis provides valuable insights into the emotional tone of customer reviews for different clothing categories. By examining the distribution of positive and negative sentiment, we can better understand customers’ perceptions of specific products. This dual-plot visualization separates positive and negative sentiment distributions for the purpose of a clearer comparison of customer feedback across departments.
+
+The left plot consists of positive sentiment distributions, which show significant variation across departments but generally peak within the mid-range of sentiment scores. Categories like "Tops" and "Dresses" have broader peaks in the positive sentiment distribution, indicating higher overall satisfaction and a diverse range of positive experiences among reviewers. On the contrary, the "Trend" category shows a relatively lower density for positive sentiment, meaning that it might not meet customer expectations as effectively as other departments.
+
+The right plot focuses on negative sentiment distributions, which reveal a generally low density across all departments. However, the "Trend" category exhibits a slightly higher peak in negative sentiment scores compared to others, highlighting a potential area for improvement. This distribution aligns with the idea that customers in this category might be more vocal about dissatisfaction. Departments like "Intimate" and "Jackets" show minimal negative sentiment, which also reflects consistency in customer satisfaction.
+
+Initially, the goal was to uncover significant disparities in sentiment between departments, with the expectation that certain types of products might attract more critical feedback. However, the data suggests that reviews tend to lean towards a positive or neutral tone overall, possibly due to the tendency of reviewers to share feedback primarily when they are satisfied with a product. For future research, a deeper dive into subcategories within each department might uncover more granular trends. Besides, we can also considering the role of specific product attributes, such as fit or material quality, as they could also provide actionable insights for enhancing customer satisfaction across all departments.
+
+### 5.1.3 PCA Analysis Result
+The PCA visualization reveals how customer reviews are distributed across departments after reducing the data to two principal components. The dense clustering of points suggests that numerical features like Age, Rating, and Positive Feedback Count do not carry enough variance to separate departments meaningfully. As most of the variables are categorical, it makes sense to observe such similar clustering around integers Interestingly, some departments like "Intimate" and "Trend" appear more isolated, potentially indicating distinct feedback patterns. However, more features could be included for better separation. For example, incorporating text-based attributes, such as sentiment analysis scores or word embeddings derived from Review Text, could enhance the ability to distinguish departments. The vertical spread of some clusters further suggests the presence of noise or uninformative features that might dilute the effectiveness of PCA.
+
+Moreover, the explained variance of the first two principal components should be analyzed to determine how much information they capture. If these components fail to represent a significant portion of the variance, additional dimensions may be required to fully understand the data. 
+
+## 5.2 Improvements and Next step
+The binary rating of manual operation does not seem to add any features that are worth deep diving. The sentiment analysis aligned with what we expected, but other analyses do not reveal prominent trends. Further steps can be taken to check for the keyness potentially between each department and ratings, or to dive deep into the interactions.
+
+# 6. Work Cited
+(1) Hutto, C.J. & Gilbert, E.E. (2014). VADER: A Parsimonious Rule-based Model for
+Sentiment Analysis of Social Media Text. Eighth International Conference on Weblogs
+and Social Media (ICWSM-14). Ann Arbor, MI, June 2014.
+(2) Biber, D. (1988). Variation across Speech and Writing. Cambridge: Cambridge
+University Press.
